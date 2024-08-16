@@ -19,11 +19,14 @@
 #include <linux/vmalloc.h>
 #include <linux/moduleparam.h>
 #include <linux/spinlock_types.h>
+#include <linux/proc_fs.h>
 
 #define SBDD_SECTOR_SHIFT      9
 #define SBDD_SECTOR_SIZE       (1 << SBDD_SECTOR_SHIFT)
 #define SBDD_MIB_SECTORS       (1 << (20 - SBDD_SECTOR_SHIFT))
 #define SBDD_NAME              "sbdd"
+
+#define PROC_FILENAME "create_dev"
 
 struct sbdd {
 	wait_queue_head_t       exitwait;
@@ -206,6 +209,45 @@ static void sbdd_delete(void)
 	}
 }
 
+// proccess write to /proc/create_dev
+static ssize_t proc_write(struct file *file, const char __user *buffer, size_t count, loff_t *pos) {
+    char *input;
+    char path[128];
+    size_t size;
+    int ret;
+
+    input = kmalloc(count + 1, GFP_KERNEL);
+    if (!input) {
+        return -ENOMEM;
+    }
+
+    if (copy_from_user(input, buffer, count)) {
+        kfree(input);
+        return -EFAULT;
+    }
+
+    input[count] = '\0';
+
+    // Waiting format "path size", example "/dev/my_block_device 1024"
+    ret = sscanf(input, "%127s %zu", path, &size);
+    if (ret != 2) {
+        pr_info("Invalid format. Use: <path> <size>\n");
+        kfree(input);
+        return -EINVAL;
+    }
+
+	pr_info("Create device in path %s and size %i MB\n", path, (int)size);
+
+    kfree(input);
+    return count;
+}
+
+
+static const struct file_operations proc_fops = {
+    .owner = THIS_MODULE,
+    .write = proc_write,
+};
+
 /*
 Note __init is for the kernel to drop this function after
 initialization complete making its memory available for other uses.
@@ -213,17 +255,17 @@ There is also __initdata note, same but used for variables.
 */
 static int __init sbdd_init(void)
 {
+	struct proc_dir_entry *entry;
+
 	int ret = 0;
-
+ 
 	pr_info("starting initialization...\n");
-	ret = sbdd_create();
 
-	if (ret) {
-		pr_warn("initialization failed\n");
-		sbdd_delete();
-	} else {
-		pr_info("initialization complete\n");
-	}
+    entry = proc_create(PROC_FILENAME, 0666, NULL, &proc_fops);
+    if (!entry) {
+        printk(KERN_ALERT "Failed to create /proc/%s\n", PROC_FILENAME);
+        return -ENOMEM;
+    }
 
 	return ret;
 }
@@ -236,6 +278,7 @@ directly into the kernel). There is also __exitdata note.
 static void __exit sbdd_exit(void)
 {
 	pr_info("exiting...\n");
+	remove_proc_entry(PROC_FILENAME, NULL);
 	sbdd_delete();
 	pr_info("exiting complete\n");
 }
