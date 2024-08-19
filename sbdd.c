@@ -111,7 +111,7 @@ static struct block_device_operations const __sbdd_bdev_ops = {
 	.owner = THIS_MODULE,
 };
 
-static int sbdd_create(void)
+static int sbdd_create(char *__dst_device_path, size_t size_MIB)
 {
 	int ret = 0;
 
@@ -235,6 +235,8 @@ static ssize_t proc_write(struct file *file, const char __user *buffer, size_t c
         kfree(input);
         return -EINVAL;
     }
+
+	sbdd_create(path, size);
 
 	pr_info("Create device in path %s and size %i MB\n", path, (int)size);
 
