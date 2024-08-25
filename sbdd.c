@@ -24,7 +24,15 @@
 #define SBDD_NAME              "sbdd"
 #define SBDD_BDEV_MODE         (FMODE_READ | FMODE_WRITE)
 
-#define PROC_FILENAME "create_dev"
+#define PROC_CREATE_DEV "sbdd_create_dev"
+#define PROC_ADD_DISK 	"sbdd_add_disk"
+#define PROC_DISK_INFO 	"sbdd_disks_info"
+#define STRING_LEN_MAX 	128
+
+struct target_bdev_l {
+	struct block_device 	*target_bdev;
+	struct target_bdev_l 	*next;
+};
 
 struct sbdd {
 	wait_queue_head_t       exitwait;
@@ -34,8 +42,7 @@ struct sbdd {
 	sector_t                capacity;
 	struct gendisk          *gd;
 	struct request_queue    *q;
-	char* 					__dst_device_path;
-	struct block_device 	*target_bdev;
+	struct target_bdev_l 	*target_bdev_first_l;
 };
 
 static struct bio_set  bio_set_sbdd;
@@ -80,7 +87,7 @@ static void sbdd_xfer_bio(struct bio *bio)
 		return;
 	}
 
-	bio_set_dev(bio_clone, __sbdd.target_bdev);
+	bio_set_dev(bio_clone, __sbdd.target_bdev_first_l->target_bdev);
 	bio_clone->bi_opf |= REQ_PREFLUSH | REQ_FUA;
 	bio_clone->bi_private = io_bio;
 	bio_clone->bi_end_io = io_end_bio;
@@ -105,6 +112,19 @@ static blk_qc_t sbdd_make_request(struct request_queue *q, struct bio *bio)
 	return BLK_STS_OK;
 }
 
+static sector_t get_capacity_targets(void)
+{
+	struct target_bdev_l* list_curr = __sbdd.target_bdev_first_l;
+	sector_t cap = 0;
+	while(list_curr)
+	{
+		cap += get_capacity(list_curr->target_bdev->bd_disk);
+		list_curr = list_curr->next;
+	}
+	
+	return cap;
+}
+
 /*
 There are no read or write operations. These operations are performed by
 the request() function associated with the request queue of the disk.
@@ -113,7 +133,7 @@ static struct block_device_operations const __sbdd_bdev_ops = {
 	.owner = THIS_MODULE,
 };
 
-static int sbdd_create(char *dst_device_path)
+static int sbdd_create(void)
 {
 	int ret = 0;
 
@@ -122,7 +142,6 @@ static int sbdd_create(char *dst_device_path)
 		pr_err("sbdd: Failed to create bio_set\n");
 		return -ENOMEM;
 	}
-
 	/*
 	This call is somewhat redundant, but used anyways by tradition.
 	The number is to be displayed in /proc/devices (0 for auto).
@@ -136,16 +155,15 @@ static int sbdd_create(char *dst_device_path)
 
 	memset(&__sbdd, 0, sizeof(struct sbdd));
 
-   __sbdd.target_bdev = blkdev_get_by_path(dst_device_path, FMODE_READ | FMODE_WRITE, THIS_MODULE);
-    if (IS_ERR(__sbdd.target_bdev)) {
-        pr_err("sbdd: Failed to get target device %s\n", dst_device_path);
-        return PTR_ERR(__sbdd.target_bdev);
-    }
+//    __sbdd.target_bdev_first_l->target_bdev = blkdev_get_by_path(dst_device_path, FMODE_READ | FMODE_WRITE, THIS_MODULE);
+//     if (IS_ERR(__sbdd.target_bdev_first_l->target_bdev)) {
+//         pr_err("sbdd: Failed to get target device %s\n", dst_device_path);
+//         return PTR_ERR(__sbdd.target_bdev_first_l->target_bdev);
+//     }
 
-	__sbdd.__dst_device_path = dst_device_path;
-    pr_info("sbdd: Target device %s opened successfully\n", dst_device_path);
+    // pr_info("sbdd: Target device %s opened successfully\n", dst_device_path);
 
-	__sbdd.capacity = get_capacity(__sbdd.target_bdev->bd_disk);
+	__sbdd.capacity = get_capacity_targets();
 
 	spin_lock_init(&__sbdd.datalock);
 	init_waitqueue_head(&__sbdd.exitwait);
@@ -160,7 +178,7 @@ static int sbdd_create(char *dst_device_path)
 	blk_queue_make_request(__sbdd.q, sbdd_make_request);
 
 	/* Configure queue */
-	blk_queue_logical_block_size(__sbdd.q, bdev_logical_block_size(__sbdd.target_bdev));
+	//blk_queue_logical_block_size(__sbdd.q, bdev_logical_block_size(__sbdd.target_bdev_first_l->target_bdev));
 
 	/* A disk must have at least one minor */
 	pr_info("allocating disk\n");
@@ -185,6 +203,61 @@ static int sbdd_create(char *dst_device_path)
 	return ret;
 }
 
+static void add_disk_to_targets(char* path)
+{
+	struct block_device* target_add;
+	struct target_bdev_l* target_l;
+	struct target_bdev_l* target_l_last;
+
+	target_add = blkdev_get_by_path(path, FMODE_READ | FMODE_WRITE, THIS_MODULE);
+    if (IS_ERR(target_add)) {
+        pr_err("sbdd: Failed to get target device %s\n", path);
+    }
+	
+	target_l = kmalloc(sizeof(struct target_bdev_l), GFP_KERNEL);
+	if (!target_l)
+	{
+		pr_err("sbdd add disk: ENOMEM\n");
+		return;
+	}
+	pr_info("Success\n");
+
+	target_l->target_bdev = target_add;
+
+	if (__sbdd.target_bdev_first_l == NULL)
+	{
+		__sbdd.target_bdev_first_l = target_l;
+		return;
+	}
+
+	pr_info("Success 1\n");
+	target_l_last = __sbdd.target_bdev_first_l;
+	pr_info("Success 5\n");
+
+	while (target_l_last->next)
+	{
+	pr_info("Success 6\n");
+
+		target_l_last = target_l_last->next;
+	}
+	pr_info("Success 2\n");
+
+	target_l_last->next = target_l_last;
+	pr_info("Success\n");
+}
+
+static void target_list_delete(struct target_bdev_l* target_bdev_l_first)
+{
+	struct target_bdev_l* list_curr = target_bdev_l_first;
+	while(list_curr) 
+	{
+		struct target_bdev_l* list_erase = list_curr;
+		list_curr = list_curr->next;
+		blkdev_put(list_erase->target_bdev, SBDD_BDEV_MODE);
+		kfree(list_erase);
+	}
+}
+
 static void sbdd_delete(void)
 {
 	atomic_set(&__sbdd.deleting, 1);
@@ -205,10 +278,11 @@ static void sbdd_delete(void)
 	if (__sbdd.gd)
 		put_disk(__sbdd.gd);
 
-	if (__sbdd.target_bdev)
+	if (__sbdd.target_bdev_first_l)
 	{
 		pr_info("cleaning up target_bdev\n");
-		blkdev_put(__sbdd.target_bdev, SBDD_BDEV_MODE);
+		target_list_delete(__sbdd.target_bdev_first_l);
+		// blkdev_put(__sbdd.target_bdev_first_l->target_bdev, SBDD_BDEV_MODE);
 	}
 
 	bioset_exit(&bio_set_sbdd);
@@ -222,8 +296,22 @@ static void sbdd_delete(void)
 	}
 }
 
-// proccess write to /proc/create_dev
-static ssize_t proc_write(struct file *file, const char __user *buffer, size_t count, loff_t *pos) {
+// proccess write to /proc/sbdd_create_dev
+static ssize_t proc_write_create_dev(struct file *file, const char __user *buffer, size_t count, loff_t *pos) {
+	if (!sbdd_create())
+	{
+		pr_info("Error");
+	}
+	else 
+	{
+		pr_info("Create device /dev/sbdd\n");
+	}
+	
+    return count;
+}
+
+// proccess write to /proc/sbdd_add_disk
+static ssize_t proc_write_add_disk(struct file *file, const char __user *buffer, size_t count, loff_t *pos) {
     char *input;
     char path[128];
     int ret;
@@ -248,18 +336,46 @@ static ssize_t proc_write(struct file *file, const char __user *buffer, size_t c
         return -EINVAL;
     }
 
-	sbdd_create(path);
+	pr_info("Add disk");
 
-	pr_info("Create device in path %s\n", path);
+	add_disk_to_targets(path);
+
+	pr_info("Add disk in path %s\n", path);
 
     kfree(input);
     return count;
 }
 
+// proccess write to /proc/sbdd_disks_info
+static ssize_t proc_write_disk_info(struct file *file, const char __user *buffer, size_t count, loff_t *pos) {
+	
+	struct target_bdev_l* list_curr = __sbdd.target_bdev_first_l;
+	pr_info("Add disks in paths: ");
+	while(true)
+	{
+		char str[STRING_LEN_MAX];
+		bdevname(list_curr->target_bdev, str);
+		pr_info("/dev/%s", str);
 
-static const struct file_operations proc_fops = {
+		if (list_curr->next == NULL)
+			return count;
+		list_curr = list_curr->next;
+	}
+}
+
+static const struct file_operations proc_fops_create_dev = {
     .owner = THIS_MODULE,
-    .write = proc_write,
+    .write = proc_write_create_dev,
+};
+
+static const struct file_operations proc_fops_add_disk = {
+    .owner = THIS_MODULE,
+    .write = proc_write_add_disk,
+};
+
+static const struct file_operations proc_fops_disk_info = {
+    .owner = THIS_MODULE,
+    .write = proc_write_disk_info,
 };
 
 /*
@@ -269,17 +385,32 @@ There is also __initdata note, same but used for variables.
 */
 static int __init sbdd_init(void)
 {
-	struct proc_dir_entry *entry;
+	struct proc_dir_entry *entry_create_dev;
+	struct proc_dir_entry *entry_add_disk;
+	struct proc_dir_entry *entry_disk_info;
 
 	int ret = 0;
  
 	pr_info("starting initialization...\n");
 
-    entry = proc_create(PROC_FILENAME, 0666, NULL, &proc_fops);
-    if (!entry) {
-        printk(KERN_ALERT "Failed to create /proc/%s\n", PROC_FILENAME);
+    entry_create_dev = proc_create(PROC_CREATE_DEV, 0666, NULL, &proc_fops_create_dev);
+    if (!entry_create_dev) {
+        printk(KERN_ALERT "Failed to create /proc/%s\n", PROC_CREATE_DEV);
         return -ENOMEM;
     }
+
+    entry_add_disk = proc_create(PROC_ADD_DISK, 0666, NULL, &proc_fops_add_disk);
+    if (!entry_add_disk) {
+        printk(KERN_ALERT "Failed to create /proc/%s\n", PROC_ADD_DISK);
+        return -ENOMEM;
+    }
+
+    entry_disk_info = proc_create(PROC_DISK_INFO, 0666, NULL, &proc_fops_disk_info);
+    if (!entry_disk_info) {
+        printk(KERN_ALERT "Failed to create /proc/%s\n", PROC_DISK_INFO);
+        return -ENOMEM;
+    }
+
 
 	return ret;
 }
@@ -292,7 +423,9 @@ directly into the kernel). There is also __exitdata note.
 static void __exit sbdd_exit(void)
 {
 	pr_info("exiting...\n");
-	remove_proc_entry(PROC_FILENAME, NULL);
+	remove_proc_entry(PROC_CREATE_DEV, NULL);
+	remove_proc_entry(PROC_ADD_DISK, NULL);
+	remove_proc_entry(PROC_DISK_INFO, NULL);
 	sbdd_delete();
 	pr_info("exiting complete\n");
 }
