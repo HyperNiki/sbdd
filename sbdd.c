@@ -155,14 +155,6 @@ static int sbdd_create(void)
 
 	memset(&__sbdd, 0, sizeof(struct sbdd));
 
-//    __sbdd.target_bdev_first_l->target_bdev = blkdev_get_by_path(dst_device_path, FMODE_READ | FMODE_WRITE, THIS_MODULE);
-//     if (IS_ERR(__sbdd.target_bdev_first_l->target_bdev)) {
-//         pr_err("sbdd: Failed to get target device %s\n", dst_device_path);
-//         return PTR_ERR(__sbdd.target_bdev_first_l->target_bdev);
-//     }
-
-    // pr_info("sbdd: Target device %s opened successfully\n", dst_device_path);
-
 	__sbdd.capacity = get_capacity_targets();
 
 	spin_lock_init(&__sbdd.datalock);
@@ -275,7 +267,6 @@ static void sbdd_delete(void)
 	{
 		pr_info("cleaning up target_bdev\n");
 		target_list_delete(__sbdd.target_bdev_first_l);
-		// blkdev_put(__sbdd.target_bdev_first_l->target_bdev, SBDD_BDEV_MODE);
 	}
 
 	bioset_exit(&bio_set_sbdd);
