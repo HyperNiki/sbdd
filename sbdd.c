@@ -153,10 +153,11 @@ static int sbdd_create(void)
 		return -EBUSY;
 	}
 
-	memset(&__sbdd, 0, sizeof(struct sbdd));
+	pr_info("registering blkdev success\n");
 
 	__sbdd.capacity = get_capacity_targets();
 
+	pr_info("deadlock init\n");
 	spin_lock_init(&__sbdd.datalock);
 	init_waitqueue_head(&__sbdd.exitwait);
 
@@ -170,7 +171,7 @@ static int sbdd_create(void)
 	blk_queue_make_request(__sbdd.q, sbdd_make_request);
 
 	/* Configure queue */
-	//blk_queue_logical_block_size(__sbdd.q, bdev_logical_block_size(__sbdd.target_bdev_first_l->target_bdev));
+	blk_queue_logical_block_size(__sbdd.q, bdev_logical_block_size(__sbdd.target_bdev_first_l->target_bdev));
 
 	/* A disk must have at least one minor */
 	pr_info("allocating disk\n");
@@ -339,7 +340,7 @@ static ssize_t proc_write_disk_info(struct file *file, const char __user *buffer
 	{
 		char str[STRING_LEN_MAX];
 		bdevname(list_curr->target_bdev, str);
-		pr_info("/dev/%s", str);
+		pr_info("/dev/%s ", str);
 
 		if (list_curr->next == NULL)
 			goto END;
@@ -347,7 +348,7 @@ static ssize_t proc_write_disk_info(struct file *file, const char __user *buffer
 	}
 
 END:
-	pr_info("");
+	pr_info("\n");
 	return count;
 }
 
@@ -399,6 +400,7 @@ static int __init sbdd_init(void)
         return -ENOMEM;
     }
 
+	memset(&__sbdd, 0, sizeof(struct sbdd));
 
 	return ret;
 }
