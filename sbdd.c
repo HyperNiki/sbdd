@@ -20,10 +20,12 @@
 #include <linux/moduleparam.h>
 #include <linux/spinlock_types.h>
 #include <linux/proc_fs.h>
+#include <linux/seq_file.h>
 
 #define SBDD_NAME              "sbdd"
 #define SBDD_BDEV_MODE         (FMODE_READ | FMODE_WRITE)
 
+#define PROC_FILE_MODE 0666
 #define PROC_CREATE_DEV "sbdd_create_dev"
 #define PROC_ADD_DISK 	"sbdd_add_disk"
 #define PROC_DISK_INFO 	"sbdd_disks_info"
@@ -344,25 +346,27 @@ static ssize_t proc_write_add_disk(struct file *file, const char __user *buffer,
     return count;
 }
 
-// proccess write to /proc/sbdd_disks_info
-static ssize_t proc_write_disk_info(struct file *file, const char __user *buffer, size_t count, loff_t *pos) {
-	
-	struct target_bdev_l* list_curr = __sbdd.target_bdev_first_l;
-	pr_info("Add disks in paths: ");
-	while(true)
-	{
-		char str[STRING_LEN_MAX];
-		bdevname(list_curr->target_bdev, str);
-		pr_info("/dev/%s ", str);
+static int proc_show_disk_info(struct seq_file *m, void *v)
+{
+    struct target_bdev_l* list_curr = __sbdd.target_bdev_first_l;
 
-		if (list_curr->next == NULL)
-			goto END;
-		list_curr = list_curr->next;
-	}
+    seq_printf(m, "Add disks in paths: ");
+    while (list_curr) {
+        char str[STRING_LEN_MAX];
+        bdevname(list_curr->target_bdev, str);
+        seq_printf(m, "/dev/%s ", str);
 
-END:
-	pr_info("\n");
-	return count;
+        list_curr = list_curr->next;
+    }
+
+    seq_printf(m, "\n");
+    return 0;
+}
+
+// proccess read to /proc/sbdd_disks_info
+static int proc_open_disk_info(struct inode *inode, struct file *file)
+{
+    return single_open(file, proc_show_disk_info, NULL);
 }
 
 static const struct file_operations proc_fops_create_dev = {
@@ -376,8 +380,11 @@ static const struct file_operations proc_fops_add_disk = {
 };
 
 static const struct file_operations proc_fops_disk_info = {
-    .owner = THIS_MODULE,
-    .write = proc_write_disk_info,
+    .owner      = THIS_MODULE,
+    .open       = proc_open_disk_info,
+    .read       = seq_read,
+    .llseek     = seq_lseek,
+    .release    = single_release,
 };
 
 /*
@@ -395,19 +402,19 @@ static int __init sbdd_init(void)
  
 	pr_info("starting initialization...\n");
 
-    entry_create_dev = proc_create(PROC_CREATE_DEV, 0666, NULL, &proc_fops_create_dev);
+    entry_create_dev = proc_create(PROC_CREATE_DEV, PROC_FILE_MODE, NULL, &proc_fops_create_dev);
     if (!entry_create_dev) {
         printk(KERN_ALERT "Failed to create /proc/%s\n", PROC_CREATE_DEV);
         return -ENOMEM;
     }
 
-    entry_add_disk = proc_create(PROC_ADD_DISK, 0666, NULL, &proc_fops_add_disk);
+    entry_add_disk = proc_create(PROC_ADD_DISK, PROC_FILE_MODE, NULL, &proc_fops_add_disk);
     if (!entry_add_disk) {
         printk(KERN_ALERT "Failed to create /proc/%s\n", PROC_ADD_DISK);
         return -ENOMEM;
     }
 
-    entry_disk_info = proc_create(PROC_DISK_INFO, 0666, NULL, &proc_fops_disk_info);
+    entry_disk_info = proc_create(PROC_DISK_INFO, PROC_FILE_MODE, NULL, &proc_fops_disk_info);
     if (!entry_disk_info) {
         printk(KERN_ALERT "Failed to create /proc/%s\n", PROC_DISK_INFO);
         return -ENOMEM;
