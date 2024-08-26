@@ -320,7 +320,7 @@ static ssize_t proc_write_add_disk(struct file *file, const char __user *buffer,
         return -EINVAL;
     }
 
-	pr_info("Add disk");
+	pr_info("Add disk starting");
 
 	add_disk_to_targets(path);
 
@@ -342,9 +342,13 @@ static ssize_t proc_write_disk_info(struct file *file, const char __user *buffer
 		pr_info("/dev/%s", str);
 
 		if (list_curr->next == NULL)
-			return count;
+			goto END;
 		list_curr = list_curr->next;
 	}
+
+END:
+	pr_info("");
+	return count;
 }
 
 static const struct file_operations proc_fops_create_dev = {
