@@ -220,7 +220,6 @@ static void add_disk_to_targets(char* path)
 		pr_err("sbdd add disk: ENOMEM\n");
 		return;
 	}
-	pr_info("Success\n");
 
 	target_l->target_bdev = target_add;
 
@@ -230,20 +229,14 @@ static void add_disk_to_targets(char* path)
 		return;
 	}
 
-	pr_info("Success 1\n");
 	target_l_last = __sbdd.target_bdev_first_l;
-	pr_info("Success 5\n");
 
 	while (target_l_last->next)
 	{
-	pr_info("Success 6\n");
-
 		target_l_last = target_l_last->next;
 	}
-	pr_info("Success 2\n");
 
 	target_l_last->next = target_l_last;
-	pr_info("Success\n");
 }
 
 static void target_list_delete(struct target_bdev_l* target_bdev_l_first)
