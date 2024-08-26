@@ -125,6 +125,19 @@ static sector_t get_capacity_targets(void)
 	return cap;
 }
 
+static uint get_block_size_targets(void)
+{
+	struct target_bdev_l* list_curr = __sbdd.target_bdev_first_l;
+	uint cap = 0;
+	while(list_curr)
+	{
+		cap += bdev_logical_block_size(list_curr->target_bdev);
+		list_curr = list_curr->next;
+	}
+	
+	return cap;
+}
+
 /*
 There are no read or write operations. These operations are performed by
 the request() function associated with the request queue of the disk.
@@ -171,7 +184,7 @@ static int sbdd_create(void)
 	blk_queue_make_request(__sbdd.q, sbdd_make_request);
 
 	/* Configure queue */
-	blk_queue_logical_block_size(__sbdd.q, bdev_logical_block_size(__sbdd.target_bdev_first_l->target_bdev));
+	blk_queue_logical_block_size(__sbdd.q, get_block_size_targets());
 
 	/* A disk must have at least one minor */
 	pr_info("allocating disk\n");
