@@ -24,6 +24,7 @@
 
 #define SBDD_NAME              "sbdd"
 #define SBDD_BDEV_MODE         (FMODE_READ | FMODE_WRITE)
+#define SBDD_SECTOR_SHIFT      9
 
 #define PROC_FILE_MODE 0666
 #define PROC_CREATE_DEV "sbdd_create_dev"
@@ -75,27 +76,74 @@ static void sbdd_xfer_bio(struct bio *bio)
 	struct bio *bio_clone;
 	struct sbdd_io_bio *io_bio;
 
-	io_bio = kmalloc(sizeof(*io_bio), GFP_KERNEL);
-	if (!io_bio) {
-		pr_err("unable to allocate space for struct io_bio\n");
-		return;
+	sector_t pos = bio->bi_iter.bi_sector;
+	sector_t len = bio->bi_io_vec->bv_len >> SBDD_SECTOR_SHIFT;
+	struct target_bdev_l *target_bdev_curent_l;
+
+	target_bdev_curent_l = __sbdd.target_bdev_first_l;
+
+	while(true) {
+		sector_t cap_current_target;
+		cap_current_target = get_capacity(target_bdev_curent_l->target_bdev->bd_disk);
+		if (cap_current_target > pos)
+			break;
+		
+		pos -= cap_current_target;
+		if (target_bdev_curent_l->next != NULL)
+			target_bdev_curent_l = target_bdev_curent_l->next;
+		else {
+			pr_err("contacting an invalid address in xfer_bio\n");
+			return;
+		}
 	}
-	io_bio->original_bio = bio;
 
-	bio_clone = bio_clone_fast(bio, GFP_NOIO, &bio_set_sbdd);
-	if (!bio_clone) {
-		pr_err("unable to clone bio\n");
-		kfree(io_bio);
-		return;
+	while(len) {
+		sector_t len_bio;
+		sector_t cap_current_target;
+		io_bio = kmalloc(sizeof(*io_bio), GFP_KERNEL);
+		if (!io_bio) {
+			pr_err("unable to allocate space for struct io_bio\n");
+			return;
+		}
+		io_bio->original_bio = bio;
+
+		bio_clone = bio_clone_fast(bio, GFP_NOIO, &bio_set_sbdd);
+		if (!bio_clone) {
+			pr_err("unable to clone bio\n");
+			kfree(io_bio);
+			return;
+		}
+
+		bio_set_dev(bio_clone, target_bdev_curent_l->target_bdev);
+
+		cap_current_target = get_capacity(target_bdev_curent_l->target_bdev->bd_disk);
+		if (cap_current_target >= len)
+			len_bio = len;
+		else 
+			len_bio = cap_current_target - pos;
+
+		bio_clone->bi_iter.bi_sector = pos;
+		bio_clone->bi_io_vec->bv_len = len_bio << SBDD_SECTOR_SHIFT;
+		bio_clone->bi_opf |= REQ_PREFLUSH | REQ_FUA;
+		bio_clone->bi_private = io_bio;
+		bio_clone->bi_end_io = io_end_bio;
+
+		pr_debug("submitting bio...\n");
+		submit_bio(bio_clone);
+
+		pos = 0;
+		len -= len_bio;
+
+		if (len) {
+			if (target_bdev_curent_l->next != NULL)
+				target_bdev_curent_l = target_bdev_curent_l->next;
+			else {
+				pr_err("contacting an invalid (address+len) in xfer_bio\n");
+				return;
+			}
+		}
 	}
 
-	bio_set_dev(bio_clone, __sbdd.target_bdev_first_l->target_bdev);
-	bio_clone->bi_opf |= REQ_PREFLUSH | REQ_FUA;
-	bio_clone->bi_private = io_bio;
-	bio_clone->bi_end_io = io_end_bio;
-
-	pr_debug("submitting bio...\n");
-	submit_bio(bio_clone);
 }
 
 static blk_qc_t sbdd_make_request(struct request_queue *q, struct bio *bio)
@@ -348,15 +396,25 @@ static ssize_t proc_write_add_disk(struct file *file, const char __user *buffer,
 
 static int proc_show_disk_info(struct seq_file *m, void *v)
 {
-    struct target_bdev_l* list_curr = __sbdd.target_bdev_first_l;
+    struct target_bdev_l *list_curr;
+
+	if (__sbdd.target_bdev_first_l == NULL) {
+		seq_printf(m, "Disks don't adds");
+		return 0;
+	}
+	
+	list_curr = __sbdd.target_bdev_first_l;
 
     seq_printf(m, "Add disks in paths: ");
-    while (list_curr) {
+    while (true) {
         char str[STRING_LEN_MAX];
         bdevname(list_curr->target_bdev, str);
         seq_printf(m, "/dev/%s ", str);
 
-        list_curr = list_curr->next;
+		if (list_curr->next == NULL)
+			break;
+
+	    list_curr = list_curr->next;
     }
 
     seq_printf(m, "\n");
